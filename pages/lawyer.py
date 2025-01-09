@@ -1,6 +1,10 @@
 import streamlit as st
 import requests
 import pandas as pd
+import os
+from dotenv import load_dotenv
+load_dotenv()
+os.getenv("google_key")
 
 # Title of the Streamlit app
 st.title("Legal Chatbot and Lawyer Recommender")
@@ -38,7 +42,7 @@ def classify_text_with_google_nlp(text, api_key):
         return []
 
 # Replace with your Google Cloud API key
-GOOGLE_API_KEY = "AIzaSyAt7GlLotEghLbrwde5spW8orysyXvgt2M"
+GOOGLE_API_KEY = os.getenv("google_key")
 
 # Execute on button click
 if st.button("Get Recommendations"):
