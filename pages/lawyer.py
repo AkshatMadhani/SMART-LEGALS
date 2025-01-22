@@ -1,10 +1,14 @@
 import streamlit as st
-import requests
 import pandas as pd
-import os
-from dotenv import load_dotenv
-load_dotenv()
-os.getenv("google_key")
+import re
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk import download
+import nltk
+
+# Download necessary NLTK data files
+nltk.download('stopwords')
+nltk.download('wordnet')
 
 # Title of the Streamlit app
 st.title("Legal Chatbot and Lawyer Recommender")
@@ -15,34 +19,51 @@ user_query = st.text_area("Enter your legal query:", placeholder="Describe your 
 # Minimum length for the query to be processed
 MIN_QUERY_LENGTH = 20
 
-# Function to classify the legal query using Google NLP API
-def classify_text_with_google_nlp(text, api_key):
-    url = f"https://language.googleapis.com/v1/documents:classifyText?key={api_key}"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "document": {
-            "type": "PLAIN_TEXT",
-            "content": text
-        }
-    }
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            categories = response.json().get("categories", [])
-            return [cat['name'] for cat in categories]
-        else:
-            error = response.json()
-            if error['error']['code'] == 400 and "too few tokens" in error['error']['message']:
-                st.error("Your query is too short. Please provide more details.")
-            else:
-                st.error(f"Error from Google NLP API: {error}")
-            return []
-    except Exception as e:
-        st.error(f"An error occurred while contacting Google NLP API: {e}")
-        return []
+# Predefined legal categories and their associated keywords
+LEGAL_CATEGORIES = {
+    "Banking and Finance": ["loan", "bank", "finance", "mortgage", "credit"],
+    "Civil": ["property", "contract", "negligence", "tort"],
+    "Constitutional": ["constitution", "rights", "amendment", "federal"],
+    "Consumer Protection": ["consumer", "refund", "warranty", "product"],
+    "Corporate": ["company", "business", "merger", "acquisition", "startup"],
+    "Criminal": ["crime", "theft", "murder", "fraud", "assault"],
+    "Environmental": ["pollution", "environment", "climate", "wildlife"],
+    "Family": ["divorce", "custody", "adoption", "marriage"],
+    "Human Rights": ["discrimination", "freedom", "equality", "justice"],
+    "Immigration": ["visa", "immigration", "asylum", "citizenship"],
+    "Intellectual Property": ["copyright", "patent", "trademark", "infringement"],
+    "Labor": ["employment", "wages", "harassment", "labor"],
+    "Media and Entertainment": ["media", "entertainment", "defamation", "privacy"],
+    "Medical": ["malpractice", "healthcare", "doctor", "hospital"],
+    "Real Estate": ["property", "real estate", "lease", "tenant"],
+    "Tax": ["tax", "income", "audit", "deduction"]
+}
 
-# Replace with your Google Cloud API key
-GOOGLE_API_KEY = os.getenv("google_key")
+# Function for preprocessing the query
+def preprocess_text(text):
+    lemmatizer = WordNetLemmatizer()
+    stop_words = set(stopwords.words("english"))
+    
+    # Tokenize and clean the text using regex
+    tokens = re.findall(r'\b[a-z]+\b', text.lower())
+    filtered_tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
+    return filtered_tokens
+
+# Function for manual classification
+def classify_query(query):
+    tokens = preprocess_text(query)
+    category_matches = {category: 0 for category in LEGAL_CATEGORIES}
+    
+    # Match keywords with tokens
+    for token in tokens:
+        for category, keywords in LEGAL_CATEGORIES.items():
+            if token in keywords:
+                category_matches[category] += 1
+
+    # Sort categories by match count and return top matches
+    sorted_categories = sorted(category_matches.items(), key=lambda x: x[1], reverse=True)
+    top_categories = [cat[0] for cat in sorted_categories if cat[1] > 0]
+    return top_categories[:3]
 
 # Execute on button click
 if st.button("Get Recommendations"):
@@ -51,67 +72,44 @@ if st.button("Get Recommendations"):
     elif len(user_query.split()) < MIN_QUERY_LENGTH:
         st.warning(f"Your query is too short. Please provide at least {MIN_QUERY_LENGTH} words for better results.")
     else:
-        # Get categories from Google NLP API
-        google_categories = classify_text_with_google_nlp(user_query, GOOGLE_API_KEY)
-        st.write(f"Google NLP API Categories: {google_categories}")
+        # Classify the query manually
+        categories = classify_query(user_query)
+        st.write(f"Detected Categories: {categories}")
 
-        if not google_categories:
-            st.warning("No categories returned by Google NLP API. Please refine your query.")
+        if not categories:
+            st.warning("No relevant categories found. Please refine your query.")
         else:
-            # Map Google categories to predefined legal categories
-            def map_to_legal_categories(categories):
-                predefined_categories = [
-                    "Banking and Finance", "Civil", "Constitutional", "Consumer Protection", "Corporate",
-                    "Criminal", "Environmental", "Family", "Human Rights", "Immigration", "Intellectual Property",
-                    "Labor", "Media and Entertainment", "Medical", "Real Estate", "Tax"
-                ]
-                mapped_categories = []
-                
-                # For each returned category, check if it contains any part of the predefined categories
-                for google_category in categories:
-                    for predef in predefined_categories:
-                        if predef.lower() in google_category.lower():  # Partial matching
-                            mapped_categories.append(predef)
-                            break  # Stop checking further once a match is found
-                return mapped_categories[:3]  # Return top 3 categories
-
-            categories = map_to_legal_categories(google_categories)
-
-            if not categories:
-                st.warning("No relevant categories found. Please provide a more detailed query or use one of the legal categories: Banking, Criminal, Family, etc.")
+            # Load lawyer dataset
+            try:
+                df_new = pd.read_csv("FINALFINALdataset.csv")  # Replace with your actual file path
+                df_new = df_new.loc[:, ~df_new.columns.str.contains('^Unnamed')]
+            except FileNotFoundError:
+                st.error("The lawyer dataset file is missing. Please ensure the file exists.")
             else:
-                # Load lawyer dataset
-                try:
-                    df_new = pd.read_csv("FINALFINALdataset.csv")  # Replace with your actual file path
-                    df_new = df_new.loc[:, ~df_new.columns.str.contains('^Unnamed')]
-                except FileNotFoundError:
-                    st.error("The lawyer dataset file is missing. Please ensure the file exists.")
+                # Filter lawyers based on categories
+                filtered_df = df_new[df_new['Type_of_Lawyer'].str.contains('|'.join(categories), na=False)]
+
+                if filtered_df.empty:
+                    st.warning("No lawyers found matching the selected categories.")
                 else:
-                    # Filter lawyers based on categories
-                    filtered_df = df_new[df_new['Type_of_Lawyer'].str.contains('|'.join(categories), na=False)]
+                    # Matching algorithm to calculate match scores
+                    def matching_algorithm(lawyer):
+                        score = 0
+                        ty = [i.strip() for i in lawyer['Type_of_Lawyer'].replace("[", "").replace("]", '').replace("'", '').split(", ")]
+                        for x in categories:
+                            if x in ty:
+                                score += 1
+                        return score
 
-                    if filtered_df.empty:
-                        st.warning("No lawyers found matching the selected categories.")
-                    else:
-                        # Matching algorithm to calculate match scores
-                        def matching_algorithm(lawyer):
-                            score = 0
-                            ty = [i.strip() for i in lawyer['Type_of_Lawyer'].replace("[", "").replace("]", '').replace("'", '').split(", ")]
-                            for x in categories:
-                                if x in ty:
-                                    score += 1
-                            return score
+                    # Add match score column
+                    filtered_df['Match_Score'] = filtered_df.apply(matching_algorithm, axis=1)
 
-                        # Add match score column
-                        filtered_df['Match_Score'] = filtered_df.apply(matching_algorithm, axis=1)
+                    # Sort lawyers based on match score, rating, years of experience, and charges
+                    top_lawyers = filtered_df.sort_values(
+                        by=['Match_Score', 'Rating', 'Years_of_Experience', 'Charges'],
+                        ascending=[False, False, False, True]
+                    )
 
-                        # Sort lawyers based on match score, rating, years of experience, and charges
-                        top_lawyers = filtered_df.sort_values(
-                            by=['Match_Score', 'Rating', 'Years_of_Experience', 'Charges'],
-                            ascending=[False, False, False, True]
-                        )
-
-                        # Display the top 10 recommended lawyers
-                        st.write("Top 10 Recommended Lawyers:")
-                        st.dataframe(top_lawyers.head(10))
-
+                    # Display the top 10 recommended lawyers
+                    st.write("Top 10 Recommended Lawyers:")
+                    st.dataframe(top_lawyers.head(10))
